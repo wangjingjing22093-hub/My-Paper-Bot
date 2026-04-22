@@ -6,19 +6,21 @@ from email.mime.multipart import MIMEMultipart
 import datetime
 import os
 
-# ================= 1. 配置数据源 =================
+# ================= 1. 配置数据源 (无限制全景版) =================
 
-# arXiv 关键词检索 (保留原有的极值图论、图谱理论等关键词)
-SEARCH_QUERY = 'cat:math.CO AND (all:"extremal graph" OR all:"spectral graph" OR all:"spectral radius" OR all:"Turan")'
+# 直接抓取整个“组合数学 (math.CO)”分类下的所有最新预印本
+SEARCH_QUERY = 'cat:math.CO'
 
-# 正式期刊的 RSS 订阅源 (为你精选并寻找了核心期刊的真实链接)
+# 核心期刊 RSS 源 (包含顶级与权威图论期刊)
 RSS_FEEDS = {
     "Linear Algebra and its Applications (LAA)": "https://rss.sciencedirect.com/publication/science/00243795",
     "Journal of Combinatorial Theory, Series B (JCTB)": "https://rss.sciencedirect.com/publication/science/00958956",
+    "Journal of Combinatorial Theory, Series A (JCTA)": "https://rss.sciencedirect.com/publication/science/00973165",
     "Discrete Mathematics (DM)": "https://rss.sciencedirect.com/publication/science/0012365X",
     "Discrete Applied Mathematics (DAM)": "https://rss.sciencedirect.com/publication/science/0166218X",
     "Journal of Graph Theory (JGT)": "https://onlinelibrary.wiley.com/feed/10970118/most-recent",
-    "European Journal of Combinatorics (EJC)": "https://rss.sciencedirect.com/publication/science/01956698"
+    "European Journal of Combinatorics (EJC)": "https://rss.sciencedirect.com/publication/science/01956698",
+    "SIAM Journal on Discrete Mathematics (SIDMA)": "https://epubs.siam.org/action/showFeed?type=etoc&feed=rss&jc=sjdmec"
 }
 
 # ================= 2. 抓取函数 =================
@@ -28,7 +30,7 @@ def fetch_arxiv_papers():
     client = arxiv.Client()
     search = arxiv.Search(
         query = SEARCH_QUERY,
-        max_results = 5, # 每天最多看5篇最新的 arXiv
+        max_results = 50, # 【已放宽限制】每天最多抓取 50 篇最新 arXiv
         sort_by = arxiv.SortCriterion.SubmittedDate
     )
     papers = []
@@ -48,8 +50,8 @@ def fetch_journal_papers():
     for journal_name, url in RSS_FEEDS.items():
         try:
             feed = feedparser.parse(url)
-            # 每个期刊每次只取最新更新的 2 篇文章，防止邮箱塞满
-            for entry in feed.entries[:2]:
+            # 【已放宽限制】去掉数量切片，抓取 RSS 源中当前更新的所有文章
+            for entry in feed.entries:
                 papers.append({
                     'source': journal_name,
                     'title': entry.title,
@@ -66,7 +68,7 @@ def send_email(arxiv_papers, journal_papers):
         print("今天没有任何新论文。")
         return
 
-    # 从 GitHub Secrets 中安全读取邮箱信息
+    # 读取 GitHub Secrets 里的邮箱配置
     SMTP_SERVER = "smtp.qq.com"  # 如果用163请改为 smtp.163.com
     SMTP_PORT = 465
     SENDER_EMAIL = os.environ.get("SENDER_EMAIL")
@@ -76,21 +78,23 @@ def send_email(arxiv_papers, journal_papers):
     msg = MIMEMultipart()
     msg['From'] = SENDER_EMAIL
     msg['To'] = RECEIVER_EMAIL
-    msg['Subject'] = f"📚 图论与图谱理论 每日文献速递 - {datetime.date.today()}"
+    # 邮件标题加上了“全景版”标识，方便你区分新老版本
+    msg['Subject'] = f"📚 图论与组合数学 每日文献速递 (全景版) - {datetime.date.today()}"
 
     # 构造 HTML 邮件内容
-    html_content = f"<h2>📅 {datetime.date.today()} 学术速递</h2>"
+    html_content = f"<h2>📅 {datetime.date.today()} 学术速递 (全景版)</h2>"
+    html_content += "<p><em>*此版本已解除数量限制，为您推送最新组合数学与图论的全部动态。</em></p>"
 
     # 模块 A：正式期刊部分
     if journal_papers:
         html_content += "<h3>🌟 顶级与权威期刊最新发表</h3><ul>"
         for p in journal_papers:
-            html_content += f"<li><strong>[{p['source']}]</strong> <a href='{p['link']}'>{p['title']}</a></li>"
+            html_content += f"<li style='margin-bottom: 8px;'><strong>[{p['source']}]</strong> <a href='{p['link']}'>{p['title']}</a></li>"
         html_content += "</ul><hr>"
 
     # 模块 B：arXiv 预印本部分
     if arxiv_papers:
-        html_content += "<h3>🚀 arXiv 最新预印本 (数学/组合)</h3>"
+        html_content += "<h3>🚀 arXiv 最新预印本 (math.CO分类)</h3>"
         for idx, p in enumerate(arxiv_papers, 1):
             html_content += f"""
             <h4>{idx}. <a href="{p['link']}">{p['title']}</a></h4>
