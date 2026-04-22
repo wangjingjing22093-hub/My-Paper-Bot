@@ -1,0 +1,28 @@
+name: Daily Paper Bot
+
+on:
+  schedule:
+    - cron: '0 0 * * *' # 每天 UTC 0点（北京时间早上8点）运行
+  workflow_dispatch: 
+
+jobs:
+  run-bot:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 获取代码
+        uses: actions/checkout@v3
+      
+      - name: 安装 Python 环境
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+          
+      - name: 安装必备工具
+        run: pip install arxiv feedparser
+          
+      - name: 运行爬虫和推送程序
+        env:
+          SENDER_EMAIL: ${{ secrets.SENDER_EMAIL }}
+          SENDER_PASSWORD: ${{ secrets.SENDER_PASSWORD }}
+          RECEIVER_EMAIL: ${{ secrets.RECEIVER_EMAIL }}
+        run: python paper_bot.py
