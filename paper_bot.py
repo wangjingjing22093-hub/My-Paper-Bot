@@ -3,15 +3,14 @@ import feedparser
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
-import datetime
+from datetime import datetime, timedelta, timezone
+import time
 import os
 
-# ================= 1. 配置数据源 (无限制全景版) =================
+# ================= 1. 配置数据源 =================
 
-# 直接抓取整个“组合数学 (math.CO)”分类下的所有最新预印本
 SEARCH_QUERY = 'cat:math.CO'
 
-# 核心期刊 RSS 源 (包含顶级与权威图论期刊)
 RSS_FEEDS = {
     "Linear Algebra and its Applications (LAA)": "https://rss.sciencedirect.com/publication/science/00243795",
     "Journal of Combinatorial Theory, Series B (JCTB)": "https://rss.sciencedirect.com/publication/science/00958956",
@@ -23,35 +22,52 @@ RSS_FEEDS = {
     "SIAM Journal on Discrete Mathematics (SIDMA)": "https://epubs.siam.org/action/showFeed?type=etoc&feed=rss&jc=sjdmec"
 }
 
-# ================= 2. 抓取函数 =================
+# ================= 2. 时间过滤器设置 =================
+# 只抓取最近 2 天内发布或更新的文章（防止周末漏抓，且大幅减少重复）
+CUTOFF_DAYS = 2
+cutoff_date = datetime.now(timezone.utc) - timedelta(days=CUTOFF_DAYS)
+
+# ================= 3. 抓取函数 (带时间过滤) =================
 
 def fetch_arxiv_papers():
-    """抓取 arXiv 的预印本论文"""
     client = arxiv.Client()
     search = arxiv.Search(
         query = SEARCH_QUERY,
-        max_results = 50, # 【已放宽限制】每天最多抓取 50 篇最新 arXiv
+        max_results = 50, 
         sort_by = arxiv.SortCriterion.SubmittedDate
     )
     papers = []
     for result in client.results(search):
-        papers.append({
-            'source': 'arXiv (预印本)',
-            'title': result.title,
-            'authors': ', '.join(author.name for author in result.authors),
-            'summary': result.summary.replace('\n', ' '),
-            'link': result.entry_id
-        })
+        # 【新增逻辑】：判断论文提交时间是否在最近2天内
+        if result.published >= cutoff_date:
+            papers.append({
+                'source': 'arXiv (预印本)',
+                'title': result.title,
+                'authors': ', '.join(author.name for author in result.authors),
+                'summary': result.summary.replace('\n', ' '),
+                'link': result.entry_id
+            })
     return papers
 
 def fetch_journal_papers():
-    """抓取正式期刊的最新发表论文"""
     papers = []
     for journal_name, url in RSS_FEEDS.items():
         try:
             feed = feedparser.parse(url)
-            # 【已放宽限制】去掉数量切片，抓取 RSS 源中当前更新的所有文章
             for entry in feed.entries:
+                # 【新增逻辑】：解析 RSS 的发布时间，过滤掉老文章
+                published_time = None
+                if hasattr(entry, 'published_parsed') and entry.published_parsed:
+                    published_time = entry.published_parsed
+                elif hasattr(entry, 'updated_parsed') and entry.updated_parsed:
+                    published_time = entry.updated_parsed
+                
+                # 如果成功获取到了时间，进行对比
+                if published_time:
+                    entry_date = datetime.fromtimestamp(time.mktime(published_time), timezone.utc)
+                    if entry_date < cutoff_date:
+                        continue # 如果时间早于两周前，直接跳过，不放入列表
+                
                 papers.append({
                     'source': journal_name,
                     'title': entry.title,
@@ -61,15 +77,15 @@ def fetch_journal_papers():
             print(f"抓取 {journal_name} 时出错: {e}")
     return papers
 
-# ================= 3. 邮件发送函数 =================
+# ================= 4. 邮件发送函数 =================
 
 def send_email(arxiv_papers, journal_papers):
+    # 如果经过时间过滤后，今天确实没有新文章，就不发邮件打扰你
     if not arxiv_papers and not journal_papers:
-        print("今天没有任何新论文。")
+        print("今天没有最近更新的论文，暂不发送邮件。")
         return
 
-    # 读取 GitHub Secrets 里的邮箱配置
-    SMTP_SERVER = "smtp.qq.com"  # 如果用163请改为 smtp.163.com
+    SMTP_SERVER = "smtp.qq.com" 
     SMTP_PORT = 465
     SENDER_EMAIL = os.environ.get("SENDER_EMAIL")
     SENDER_PASSWORD = os.environ.get("SENDER_PASSWORD")
@@ -78,23 +94,19 @@ def send_email(arxiv_papers, journal_papers):
     msg = MIMEMultipart()
     msg['From'] = SENDER_EMAIL
     msg['To'] = RECEIVER_EMAIL
-    # 邮件标题加上了“全景版”标识，方便你区分新老版本
-    msg['Subject'] = f"📚 图论与组合数学 每日文献速递 (全景版) - {datetime.date.today()}"
+    msg['Subject'] = f"📚 图论文献速递 (去重版) - {datetime.date.today()}"
 
-    # 构造 HTML 邮件内容
-    html_content = f"<h2>📅 {datetime.date.today()} 学术速递 (全景版)</h2>"
-    html_content += "<p><em>*此版本已解除数量限制，为您推送最新组合数学与图论的全部动态。</em></p>"
+    html_content = f"<h2>📅 {datetime.date.today()} 学术速递 (去重版)</h2>"
+    html_content += f"<p><em>*此版本已开启时间过滤，只为您推送最近 {CUTOFF_DAYS} 天内的新增内容。</em></p>"
 
-    # 模块 A：正式期刊部分
     if journal_papers:
         html_content += "<h3>🌟 顶级与权威期刊最新发表</h3><ul>"
         for p in journal_papers:
             html_content += f"<li style='margin-bottom: 8px;'><strong>[{p['source']}]</strong> <a href='{p['link']}'>{p['title']}</a></li>"
         html_content += "</ul><hr>"
 
-    # 模块 B：arXiv 预印本部分
     if arxiv_papers:
-        html_content += "<h3>🚀 arXiv 最新预印本 (math.CO分类)</h3>"
+        html_content += "<h3>🚀 arXiv 最新预印本</h3>"
         for idx, p in enumerate(arxiv_papers, 1):
             html_content += f"""
             <h4>{idx}. <a href="{p['link']}">{p['title']}</a></h4>
@@ -104,7 +116,6 @@ def send_email(arxiv_papers, journal_papers):
     
     msg.attach(MIMEText(html_content, 'html', 'utf-8'))
 
-    # 发送邮件
     try:
         server = smtplib.SMTP_SSL(SMTP_SERVER, SMTP_PORT)
         server.login(SENDER_EMAIL, SENDER_PASSWORD)
@@ -114,7 +125,6 @@ def send_email(arxiv_papers, journal_papers):
     except Exception as e:
         print(f"邮件发送失败: {e}")
 
-# ================= 4. 主程序运行 =================
 if __name__ == "__main__":
     print("开始抓取 arXiv 预印本...")
     arxiv_results = fetch_arxiv_papers()
@@ -122,5 +132,5 @@ if __name__ == "__main__":
     print("开始抓取各大期刊 RSS 源...")
     journal_results = fetch_journal_papers()
     
-    print(f"共抓取到 {len(arxiv_results)} 篇 arXiv 文章，{len(journal_results)} 篇期刊文章，准备发送...")
+    print(f"经过时间过滤，共抓取到 {len(arxiv_results)} 篇近期 arXiv 文章，{len(journal_results)} 篇近期期刊文章，准备发送...")
     send_email(arxiv_results, journal_results)
