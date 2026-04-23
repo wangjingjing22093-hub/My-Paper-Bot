@@ -23,11 +23,10 @@ RSS_FEEDS = {
 }
 
 # ================= 2. 时间过滤器设置 =================
-# 只抓取最近 2 天内发布或更新的文章（防止周末漏抓，且大幅减少重复）
 CUTOFF_DAYS = 2
 cutoff_date = datetime.now(timezone.utc) - timedelta(days=CUTOFF_DAYS)
 
-# ================= 3. 抓取函数 (带时间过滤) =================
+# ================= 3. 抓取函数 =================
 
 def fetch_arxiv_papers():
     client = arxiv.Client()
@@ -38,7 +37,6 @@ def fetch_arxiv_papers():
     )
     papers = []
     for result in client.results(search):
-        # 【新增逻辑】：判断论文提交时间是否在最近2天内
         if result.published >= cutoff_date:
             papers.append({
                 'source': 'arXiv (预印本)',
@@ -55,18 +53,16 @@ def fetch_journal_papers():
         try:
             feed = feedparser.parse(url)
             for entry in feed.entries:
-                # 【新增逻辑】：解析 RSS 的发布时间，过滤掉老文章
                 published_time = None
                 if hasattr(entry, 'published_parsed') and entry.published_parsed:
                     published_time = entry.published_parsed
                 elif hasattr(entry, 'updated_parsed') and entry.updated_parsed:
                     published_time = entry.updated_parsed
                 
-                # 如果成功获取到了时间，进行对比
                 if published_time:
                     entry_date = datetime.fromtimestamp(time.mktime(published_time), timezone.utc)
                     if entry_date < cutoff_date:
-                        continue # 如果时间早于两周前，直接跳过，不放入列表
+                        continue 
                 
                 papers.append({
                     'source': journal_name,
@@ -80,7 +76,6 @@ def fetch_journal_papers():
 # ================= 4. 邮件发送函数 =================
 
 def send_email(arxiv_papers, journal_papers):
-    # 如果经过时间过滤后，今天确实没有新文章，就不发邮件打扰你
     if not arxiv_papers and not journal_papers:
         print("今天没有最近更新的论文，暂不发送邮件。")
         return
@@ -94,9 +89,11 @@ def send_email(arxiv_papers, journal_papers):
     msg = MIMEMultipart()
     msg['From'] = SENDER_EMAIL
     msg['To'] = RECEIVER_EMAIL
-    msg['Subject'] = f"📚 图论文献速递 (去重版) - {datetime.date.today()}"
+    
+    # 【修复点】：将 datetime.date.today() 替换为了 datetime.now().date()
+    msg['Subject'] = f"📚 图论文献速递 (去重版) - {datetime.now().date()}"
 
-    html_content = f"<h2>📅 {datetime.date.today()} 学术速递 (去重版)</h2>"
+    html_content = f"<h2>📅 {datetime.now().date()} 学术速递 (去重版)</h2>"
     html_content += f"<p><em>*此版本已开启时间过滤，只为您推送最近 {CUTOFF_DAYS} 天内的新增内容。</em></p>"
 
     if journal_papers:
